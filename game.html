@@ -16231,6 +16231,50 @@ const ULTRA_DATA = {"freeAgents":[{"n":"Mateusz Wieczorek","p":"LB","a":23,"o":5
     const IDB_VERSION = 1;
     const IDB_STORE = "saves";
     const IDB_KEY = "current_game_save";
+    const SAVE_VERSION = 1;
+
+    // Validate a detached copy before changing the active career or league membership.
+    function restoreCareerState(data) {
+        const isRecord = value => value && typeof value === "object" && !Array.isArray(value);
+        if (!isRecord(data) || (data.saveVersion !== undefined && data.saveVersion !== SAVE_VERSION)) {
+            throw new Error("Nieobsługiwana wersja lub format zapisu kariery.");
+        }
+        const next = JSON.parse(JSON.stringify(data));
+        if (typeof next.myClub !== "string" || !next.myClub.trim() ||
+            !Number.isInteger(next.myTier) || next.myTier < 1 || next.myTier > 9 ||
+            !isRecord(next.leagueData) || !isRecord(next.playersDatabase)) {
+            throw new Error("Zapis nie zawiera poprawnego klubu, ligi lub kadr.");
+        }
+        const membership = {};
+        const seen = new Set();
+        for (let tier = 1; tier <= 9; tier++) {
+            const table = next.leagueData[tier];
+            if (!isRecord(table)) throw new Error("Brak tabeli ligi " + tier + ".");
+            // Legacy saves already contain membership in their league tables.
+            const names = next.saveVersion === undefined ? Object.keys(table) : next.clubsByTier?.[tier];
+            if (!Array.isArray(names) || names.length !== Object.keys(table).length) {
+                throw new Error("Niespójna lista klubów ligi " + tier + ".");
+            }
+            for (const name of names) {
+                if (typeof name !== "string" || !name.trim() || seen.has(name) ||
+                    !Object.prototype.hasOwnProperty.call(table, name) ||
+                    !isRecord(table[name]) || !Number.isFinite(table[name].pts) ||
+                    !Array.isArray(next.playersDatabase[name])) {
+                    throw new Error("Niepoprawny lub powtórzony klub w lidze " + tier + ".");
+                }
+                seen.add(name);
+            }
+            membership[tier] = [...names];
+        }
+        if (!membership[next.myTier].includes(next.myClub)) {
+            throw new Error("Klub gracza nie należy do zapisanej ligi.");
+        }
+        next.saveVersion = SAVE_VERSION;
+        next.clubsByTier = membership;
+        for (let tier = 1; tier <= 9; tier++) clubs[tier] = [...membership[tier]];
+        G = next;
+        window.G = G;
+    }
 
     function openSaveDatabase() {
         return new Promise((resolve, reject) => {
@@ -16260,8 +16304,9 @@ const ULTRA_DATA = {"freeAgents":[{"n":"Mateusz Wieczorek","p":"LB","a":23,"o":5
                 let tx = db.transaction(IDB_STORE, "readwrite");
                 let store = tx.objectStore(IDB_STORE);
                 let req = store.put(data, key);
-                req.onsuccess = () => resolve(true);
-                req.onerror = (e) => reject(e.target.error);
+                tx.oncomplete = () => { db.close(); resolve(true); };
+                tx.onabort = () => { db.close(); reject(tx.error || new Error("Zapis przerwany.")); };
+                tx.onerror = () => { db.close(); reject(tx.error || new Error("Błąd zapisu.")); };
             });
         });
     }
@@ -16282,6 +16327,8 @@ const ULTRA_DATA = {"freeAgents":[{"n":"Mateusz Wieczorek","p":"LB","a":23,"o":5
         if (!gameState) return null;
         // Klonujemy stan gry z przycięciem olbrzymich historii tekstowych
         let clone = JSON.parse(JSON.stringify(gameState));
+        clone.saveVersion = SAVE_VERSION;
+        clone.clubsByTier = JSON.parse(JSON.stringify(clubs));
 
         // Optymalizacja rozmiaru
         if (clone.log && Array.isArray(clone.log) && clone.log.length > 200) {
@@ -16379,8 +16426,7 @@ const ULTRA_DATA = {"freeAgents":[{"n":"Mateusz Wieczorek","p":"LB","a":23,"o":5
                 return;
             }
 
-            G = data;
-            window.G = G;
+            restoreCareerState(data);
             if (window.ALL_PLAYER_NAMES_SET) window.ALL_PLAYER_NAMES_SET.clear();
             alert(`📂 Pomyślnie wczytano karierę klubu ${G.myClub}!\n(Sezon: ${G.season || 1}, Dzień: ${(G.calendarDay || 0) + 1})`);
             appendLog(`[Wczytanie] Pomyślnie wczytano stan gry (${G.myClub}).`);
@@ -16437,11 +16483,10 @@ const ULTRA_DATA = {"freeAgents":[{"n":"Mateusz Wieczorek","p":"LB","a":23,"o":5
                     alert("Nieprawidłowy format pliku zapisu!");
                     return;
                 }
-                G = data;
-                window.G = G;
+                restoreCareerState(data);
                 if (window.ALL_PLAYER_NAMES_SET) window.ALL_PLAYER_NAMES_SET.clear();
                 try {
-                    await idbSaveData(IDB_KEY, G);
+                    await idbSaveData(IDB_KEY, prepareSavePayload(G));
                 } catch(idbE) {}
 
                 alert(`📂 Pomyślnie zaimportowano karierę klubu ${G.myClub} z pliku!`);
@@ -17845,6 +17890,17 @@ const ULTRA_DATA = {"freeAgents":[{"n":"Mateusz Wieczorek","p":"LB","a":23,"o":5
             if (!clubs[i]) clubs[i] = [];
         }
 
+        // Capture results before moving clubs to next season's leagues.
+        const completedTier = G.myTier;
+        const standings = Object.entries(G.leagueData[completedTier] || {})
+            .sort((a, b) => (b[1].pts || 0) - (a[1].pts || 0)).map(x => x[0]);
+        const pos = standings.indexOf(G.myClub) + 1;
+        if (pos === 0) {
+            document.getElementById("btn-action").disabled = false;
+            throw new Error("Klub gracza nie występuje w tabeli kończącego się sezonu.");
+        }
+        computeEuropeAfterSeason();
+
         // === FIX: Zbierz ruchy najpierw, potem zastosuj (zapobiega kaskadowym spadkom) ===
         let toPromote = []; // { club, fromTier, toTier }
         let toRelegate = [];
@@ -17883,20 +17939,17 @@ const ULTRA_DATA = {"freeAgents":[{"n":"Mateusz Wieczorek","p":"LB","a":23,"o":5
             clubs[fromTier] = clubs[fromTier].filter(c => c !== club);
             if (club !== G.myClub) relegationSquadSelloff(club, toTier);
         });
-        let standings = Object.entries(G.leagueData[G.myTier]||{}).sort((a, b) => b[1].pts - a[1].pts).map(x => x[0]);
-        let pos = standings.indexOf(G.myClub) + 1;
         
         // Przyznaj oficjalną premię ligową na koniec sezonu
         let leaguePrizePLN = calculateLeagueEndOfSeasonPrize(G.myTier, pos, standings.length);
         if (leaguePrizePLN > 0) {
             awardClubPrizeMoney(G.myClub, leaguePrizePLN, `Zajęcie ${pos}. miejsca w ${tierNames[G.myTier-1]}`, (pos === 1 ? "🏆" : "🏅"), "Premia Ligowa");
         }
-        let nClubs = standings.length || 16;
-        if (pos <= 3 && G.myTier > 1) {
+        if (toPromote.some(move => move.club === G.myClub)) {
             G.myTier--;
             promoMsg = ` ✅ AWANS do ${tierNames[G.myTier-1]}!`;
             appendLog(promoMsg);
-        } else if (pos > nClubs - 3 && G.myTier < 9) {
+        } else if (toRelegate.some(move => move.club === G.myClub)) {
             G.myTier++;
             promoMsg = ` ⬇️ SPADEK do ${tierNames[G.myTier-1]}!`;
             appendLog(promoMsg);
@@ -17922,14 +17975,12 @@ const ULTRA_DATA = {"freeAgents":[{"n":"Mateusz Wieczorek","p":"LB","a":23,"o":5
         // Realistyczna ewolucja kadr i poziomów OVR wszystkich klubów
         evolveAllClubsSeason();
 
-        // Przelicz awanse do europejskich pucharów przed zmianą sezonu
-        computeEuropeAfterSeason();
 
         // Uruchom Galę Złotego Orła
         runGoldenEagleGala();
         setTimeout(() => { openGoldenEagleGalaModal(); }, 600);
 
-        let html = `<h3>Koniec sezonu</h3><p>Pozycja: ${pos} w ${tierNames[G.myTier-1]}</p>`;
+        let html = `<h3>Koniec sezonu</h3><p>Pozycja: ${pos} w ${tierNames[completedTier-1]}</p>`;
         if (fired) {
             html += `<p style="color:#e2495a;font-weight:bold;font-size:1.1em;">❌ Zostałeś zwolniony z funkcji menedżera!</p>`;
             G.managerReputation = Math.max(5, G.managerReputation - 12);

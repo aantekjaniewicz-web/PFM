@@ -1,5 +1,9 @@
 # 🔧 Instrukcja Refaktoru — dla Antigravity / AI
 
+> Dokument historyczny, zachowany jako mapa sekcji kodu. Aktualny plan:
+> [docs/PLAN.md](docs/PLAN.md), zasady: [AGENTS.md](AGENTS.md).
+> Zalecenie zachowania wszystkich globali poniżej nie jest docelową architekturą.
+
 ## CEL
 
 Rozbić `game.html` (9.4MB, jeden plik) na modularną strukturę wieloplikową.  

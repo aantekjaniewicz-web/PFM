@@ -1,10 +1,24 @@
 # ⚽ Polish Football Manager (PFM) — Mini Football Career OMEGA v3.5
 
+## Przebudowa aplikacji
+
+Aktualny plan i status: [docs/PLAN.md](docs/PLAN.md). Zasady pracy: [AGENTS.md](AGENTS.md).
+Scenariusze kontroli gry: [docs/TESTING.md](docs/TESTING.md).
+
+Testy regresji: `node --test` (Node.js 24, bez instalowania paczek).
+Workflow GitHub Actions uruchamia je przy push i pull request.
+Wersja wyjściowa jest zachowana w Git: `4e59c2b6976ee11845f024fb924267d3224c55b3`.
+
+Rozpoczęto stabilizację końca sezonu i zapisu przynależności klubów do lig.
+Poniższa dawna struktura docelowa i `REFACTOR.md` są materiałem pomocniczym;
+obowiązujący kierunek architektury opisuje aktualny plan.
+
 Menedżer piłkarski polskich lig — od Klasy B po Ekstraklasę i puchary UEFA.
 
 ## 🎮 Jak uruchomić
 
-Otwórz `game.html` w przeglądarce (Chrome/Firefox/Edge). Gra działa w 100% offline.
+Otwórz `game.html` w przeglądarce (Chrome/Firefox/Edge). Logika gry działa lokalnie;
+fonty Google wymagają internetu, a bez niego przeglądarka użyje fontów zastępczych.
 
 ## 📁 Struktura projektu (aktualna)
 
